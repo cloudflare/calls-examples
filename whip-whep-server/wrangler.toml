@@ -1,0 +1,17 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "whipwhep-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-04-03"
+
+[vars]
+CALLS_API = "https://rtc.live.cloudflare.com"
+CALLS_APP_ID = "<TBD>"
+CALLS_APP_SECRET = "<TBD>"
+
+[[durable_objects.bindings]]
+name = "LIVE_STORE"
+class_name = "LiveStore"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["LIVE_STORE"]
