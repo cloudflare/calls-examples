@@ -14,4 +14,4 @@ class_name = "LiveStore"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["LIVE_STORE"]
+new_classes = ["LiveStore"]
