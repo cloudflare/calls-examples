@@ -66,7 +66,7 @@ function optionsResponse(): Response {
 }
 async function whipHandler(request: Request, env: Env, ctx: ExecutionContext, parsedURL: URL): Promise<Response> 
 {
-	const groups = /\/ingest\/(\w+)\/?(\w+)?/g.exec(parsedURL.pathname)
+	const groups = /\/ingest\/([\w-]+)\/?([\w-]+)?/g.exec(parsedURL.pathname)
 	if(!groups || groups.length < 2) {
 		return new Response("not found", {status: 404})
 	}
@@ -115,7 +115,7 @@ async function whipHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 
 async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, parsedURL: URL): Promise<Response> 
 {
-	const groups = /\/play\/(\w+)\/?(\w+)?/g.exec(parsedURL.pathname)
+	const groups = /\/play\/([\w-]+)\/?([\w-]+)?/g.exec(parsedURL.pathname)
 	if(!groups || groups.length < 2) {
 		return new Response("not found", {status: 404})
 	}
@@ -138,11 +138,13 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 				}
 			}
 			const renegotiateResponse = await fetch(`${CallsEndpoint}/sessions/${sessionId}/renegotiate`, {
-				method: 'POST',
+				method: 'PUT',
 				headers: CallsEndpointHeaders,
 				body: JSON.stringify(renegotiateBody),
 			})
-			return new Response(null, {status: renegotiateResponse.status})
+			return new Response(null, {status: renegotiateResponse.status, headers: {
+				"access-control-allow-origin": "*"
+			}})
 		default:
 			return new Response("Not supported", {status: 400})
 	}
@@ -163,11 +165,12 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 	return new Response(newTracksResult.sessionDescription.sdp, {
 		status: 201,
 		headers: {
+			"access-control-expose-headers": "location",
+			"access-control-allow-origin": "*",
 			'content-type': "application/sdp",
 			'protocol-version': "draft-ietf-wish-whep-00",
-			etag: `"${newSessionResult.sessionId}"`,
-			location: `/ingest/${liveId}/${newSessionResult.sessionId}`,
-			"access-control-allow-origin": "*",
+			"etag": `"${newSessionResult.sessionId}"`,
+			"location": `/play/${liveId}/${newSessionResult.sessionId}`,
 		},
 	})
 }
