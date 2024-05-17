@@ -28,3 +28,17 @@ If you want it to run on the Cloudflare network:
 ```
 npx wrangler deploy
 ```
+
+### Ingest
+The ingest endpoint will look like \<deployed-domain\>/ingest/\<stream-name\>
+
+Example: http://your-domain.com/ingest/my-live
+
+### Play
+
+The play endpoint will look like \<deployed-domain\>/play/\<stream-name\>
+
+Example: http://your-domain.com/play/my-live
+
+## Bonus: WHEP player
+A basic WHEP player can be found under the directory wish-whep-00-player/

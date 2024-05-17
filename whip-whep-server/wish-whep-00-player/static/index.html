@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- This adapter normalizes cross-browser differences in WebRTC APIs. Currently necessary in order to support Firefox. -->
+    <script
+      src="https://cdnjs.cloudflare.com/ajax/libs/webrtc-adapter/8.1.2/adapter.min.js"
+      integrity="sha512-l40eBFtXx+ve5RryIELC3y6/OM6Nu89mLGQd7fg1C93tN6XrkC3supb+/YiD/Y+B8P37kdJjtG1MT1kOO2VzxA=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+    ></script>
+  </head>
+
+  <body>
+    <div class="grid">
+      <h1>Basic WISH WHEP 00 Player</h1>
+      <div><input id="resource" /></div>
+      <div><button id="load">Load</button></div>
+      <div>
+        <h2>Remote media</h2>
+        <video id="remote-video" autoplay></video>
+      </div>
+    </div>
+
+    <script type="module">
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+      async function load(resource) {
+        self.pc = new RTCPeerConnection({
+            iceServers: [
+            {
+                urls: 'stun:stun.cloudflare.com:3478'
+            }
+            ],
+            bundlePolicy: 'max-bundle'
+        });
+        
+        const candidatesPromise = new Promise((resolve) => {
+            self.pc.addEventListener('icegatheringstatechange', (ev) => {
+            let connection = ev.target;
+
+            switch (connection.iceGatheringState) {
+                case "complete":
+                resolve()
+                break;
+            }
+            })
+        })
+
+        const remoteTracksPromise = new Promise(resolve => {
+            let tracks = [];
+            self.pc.ontrack = event => {
+            tracks.push(event.track);
+            console.debug(event)
+            if (tracks.length >= 2) {
+                // remote video & audio are ready
+                resolve(tracks);
+            }
+            };
+        });
+        const offer = await fetch(resource, {method: "POST"})
+        await self.pc.setRemoteDescription(new RTCSessionDescription({type: "offer", sdp: await offer.text()}))
+        const answer = await self.pc.createAnswer()
+        await self.pc.setLocalDescription(answer)
+        await candidatesPromise
+        let sessionUrl = new URL(resource)
+        sessionUrl.pathname = offer.headers.get('location')
+        await fetch(sessionUrl.href, {method: "PATCH", body: answer.sdp})
+        const remoteTracks = await remoteTracksPromise;
+        const remoteVideoElement = document.getElementById('remote-video');
+        const remoteStream = new MediaStream();
+        remoteStream.addTrack(remoteTracks[0]);
+        remoteStream.addTrack(remoteTracks[1]);
+        remoteVideoElement.srcObject = remoteStream;
+      }
+      document.querySelector('#load').addEventListener('click', async function() {
+        const resourceInput = document.querySelector('#resource')
+        await load(resourceInput.value)
+      });
+    </script>
+    <style>
+      /* Styles are safe to ignore, just here for demo */
+      html {
+        color-scheme: light dark;
+        font-family:
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          'Segoe UI',
+          Roboto,
+          Oxygen,
+          Ubuntu,
+          Cantarell,
+          'Open Sans',
+          'Helvetica Neue',
+          sans-serif;
+        background: white;
+        color: black;
+      }
+      body,
+      h1,
+      h2 {
+        margin: 0;
+      }
+      h1,
+      h2 {
+        font-weight: 400;
+      }
+      h1 {
+        font-size: 1.5rem;
+        grid-column: 1 / -1;
+      }
+      h2 {
+        font-size: 1rem;
+        margin-bottom: 0.5rem;
+      }
+      video {
+        width: 100%;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 1rem;
+      }
+
+      @media (max-width: 500px) {
+        .grid {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+    </style>
+  </body>
+</html>
