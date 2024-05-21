@@ -154,8 +154,16 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 		return new Response("Live not started yet", {status: 404})
 	}
 	const newSessionResult = await (await fetch(`${CallsEndpoint}/sessions/new`, {method: 'POST', headers: CallsEndpointHeaders})).json() as NewSessionResponse
+	const remoteOffer = await request.text()
 	const newTracksBody = {
-			"tracks": tracks
+			"tracks": tracks,
+			... (remoteOffer.length > 0? 
+				{"sessionDescription": 
+					{
+						"type": "offer",
+						"sdp": remoteOffer
+					}
+				} : {})
 	}
 	const newTracksResult = await (await fetch(`${CallsEndpoint}/sessions/${newSessionResult.sessionId}/tracks/new`, {
 		method: 'POST',
