@@ -1,0 +1,205 @@
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+
+<body>
+    <div class="grid">
+        <h1 id="heading">Calls DataChannel Test</h1>
+        <p>This example establishes two datachannels: one publishes data and the other one subscribes, the test measures how fast a message travels to and from the server.</p>
+        <div>
+            <button id="dc-start" style="display: none">Start test</button>
+            <p id="dc-stats">&nbsp;</p>
+        </div>
+    </div>
+    <script type="module">
+        // This is the App ID from the dashboard that identifies this Calls Application.
+        // https://dash.cloudflare.com/?to=/:account/calls
+        // Note: Calls sessions are limited to interacting with sessions in the same App ID.
+        const APP_ID = "$APP_ID";
+        // ❗❗❗ DO NOT USE YOUR TOKEN IN THE BROWSER FOR PRODUCTION. It should be kept and used server-side.
+        const APP_TOKEN = "$APP_TOKEN";
+        // We'll use this for authentication when making requests to the Calls API.
+        const headers = {
+            Authorization: `Bearer ${APP_TOKEN}`,
+        };
+        const API_BASE = `https://rtc.live.cloudflare.com/v1/apps/${APP_ID}`;
+
+        const echoMagic = crypto.randomUUID()
+        const dcStartButton = document.getElementById("dc-start")
+        const dcStats = document.getElementById("dc-stats")
+
+        const dcSamples = []
+
+        const session1 = await createCallsSession()
+        const session2 = await createCallsSession()
+
+        const channel1resp = await fetch(
+            `${API_BASE}/sessions/${session1.sessionId}/datachannels/new`,
+            {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                    dataChannels: [
+                        {
+                            location: "local",
+                            dataChannelName: "channel-one",
+                        },
+                    ],
+                }),
+            }
+        ).then((res) => res.json());
+
+        const channel1 = session1.peerConnection.createDataChannel(
+            "channel-one",
+            {
+                negotiated: true,
+                id: channel1resp.dataChannels[0].id,
+            }
+        );
+
+        const channel1SubscribeResp = await fetch(
+            `${API_BASE}/sessions/${session2.sessionId}/datachannels/new`,
+            {
+                method: "POST",
+                headers,
+                body: JSON.stringify({
+                    dataChannels: [
+                        {
+                            location: "remote",
+                            sessionId: session1.sessionId,
+                            dataChannelName: "channel-one",
+                        },
+                    ],
+                }),
+            }
+        ).then((res) => res.json());
+
+        const channel1Subscribed =
+            session2.peerConnection.createDataChannel(
+                "channel-one-subscribed",
+                {
+                    negotiated: true,
+                    id: channel1SubscribeResp.dataChannels[0].id,
+                }
+            );
+
+        dcStartButton.style.display = "block"
+
+        channel1Subscribed.addEventListener('message', (evt) => {
+            const received = evt.data
+            const receivedTs = performance.now()
+            const sendTs = parseFloat(received)
+            dcSamples.push(receivedTs - sendTs)
+            updateStats(dcSamples, dcStats)
+        })
+
+        let dcInterval
+        dcStartButton.addEventListener('click', () => {
+            if (dcStartButton.textContent.startsWith('Start')) {
+                dcSamples.length = 0;
+                dcInterval = runDc()
+                dcStartButton.textContent = dcStartButton.textContent.replace('Start', 'Stop')
+            } else {
+                clearInterval(dcInterval)
+                dcStartButton.textContent = dcStartButton.textContent.replace('Stop', 'Start')
+            }
+        })
+
+
+        function runDc() {
+            return setInterval(() => {
+                channel1.send(performance.now())
+            }, 500)
+        }
+
+        function stdev(arr) {
+            let mean = arr.reduce((acc, curr) => {
+                return acc + curr
+            }, 0) / arr.length;
+            arr = arr.map((k) => {
+                return (k - mean) ** 2
+            });
+            let sum = arr.reduce((acc, curr) => acc + curr, 0);
+            let variance = sum / arr.length
+            return Math.sqrt(sum / arr.length)
+        }
+
+        function updateStats(samples, elem) {
+            const min = Math.min.apply(null, samples)
+            const max = Math.max.apply(null, samples)
+            const avg = samples.reduce((a, b) => a + b) / samples.length
+            const std = stdev(samples)
+            elem.textContent = `Samples: ${samples.length}; Min: ${min.toFixed(2)}; Max: ${max.toFixed(2)}; Stdev: ${std.toFixed(2)}; Average: ${avg.toFixed(2)}`
+        }
+
+        async function createCallsSession() {
+            const peerConnection = new RTCPeerConnection({
+                iceServers: [
+                    {
+                        urls: "stun:stun.cloudflare.com:3478",
+                    },
+                ],
+                bundlePolicy: "max-bundle",
+            });
+
+            // in order for the ICE connection to be established, there must
+            // be at least one track present, but since we want each peer
+            // connection and session to have tracks explicitly pushed and
+            // pulled, we can add an empty audio track here to force the
+            // connection to be established.
+            peerConnection.addTransceiver("audio", {
+                direction: "inactive",
+            });
+
+            const dc = peerConnection.createDataChannel("server-events");
+
+            // create an offer and set it as the local description
+            await peerConnection.setLocalDescription(
+                await peerConnection.createOffer()
+            );
+            const { sessionId, sessionDescription } = await fetch(
+                `${API_BASE}/sessions/new`,
+                {
+                    method: "POST",
+                    headers,
+                    body: JSON.stringify({
+                        sessionDescription: peerConnection.localDescription,
+                    }),
+                }
+            ).then((res) => res.json());
+            const connected = new Promise((res, rej) => {
+                // timeout after 5s
+                setTimeout(rej, 5000);
+                const iceConnectionStateChangeHandler = () => {
+                    if (peerConnection.iceConnectionState === "connected") {
+                        peerConnection.removeEventListener(
+                            "iceconnectionstatechange",
+                            iceConnectionStateChangeHandler
+                        );
+                        res(undefined);
+                    }
+                };
+                peerConnection.addEventListener(
+                    "iceconnectionstatechange",
+                    iceConnectionStateChangeHandler
+                );
+            });
+
+            // Once both local and remote descriptions are set, the ICE process begins
+            await peerConnection.setRemoteDescription(sessionDescription);
+            // Wait until the peer connection's iceConnectionState is "connected"
+            await connected;
+            return {
+                peerConnection,
+                sessionId,
+                dc,
+            };
+        }
+    </script>
+</body>
+</html>
