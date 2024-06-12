@@ -77,15 +77,30 @@ async function whipHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 		return optionsResponse()
 	case 'POST':
 		break
+	case 'PATCH':
+		return new Response(null, {status: 501, headers: {
+			"access-control-allow-headers": "content-type,authorization,if-match",
+			"access-control-allow-methods": "PATCH,POST,PUT,DELETE,OPTIONS",
+			"access-control-allow-origin": "*",
+			"access-control-expose-headers": "x-thunderclap,location,link,accept-post,accept-patch,etag",
+		}})
 	case 'DELETE':
 		stub.deleteTracks()
-		return new Response("OK")
+		return new Response("OK", {
+			headers: {
+				"access-control-allow-headers": "content-type,authorization,if-match",
+				"access-control-allow-methods": "PATCH,POST,PUT,DELETE,OPTIONS",
+				"access-control-allow-origin": "*",
+				"access-control-expose-headers": "x-thunderclap,location,link,accept-post,accept-patch,etag",
+			}
+		})
 	default:
 		return new Response("Not supported", {status: 400})
 	}
 	const CallsEndpoint = `${env.CALLS_API}/v1/apps/${env.CALLS_APP_ID}`
 	const CallsEndpointHeaders = {'Authorization': `Bearer ${env.CALLS_APP_SECRET}`}
-	const newSessionResult = await (await fetch(`${CallsEndpoint}/sessions/new`, {method: 'POST', headers: CallsEndpointHeaders})).json() as NewSessionResponse
+	const resp = await fetch(`${CallsEndpoint}/sessions/new`, {method: 'POST', headers: CallsEndpointHeaders})
+	const newSessionResult = await resp.json() as NewSessionResponse
 	const newTracksBody = {
 			"sessionDescription": {
 				"type": "offer",
@@ -105,6 +120,10 @@ async function whipHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 	return new Response(newTracksResult.sessionDescription.sdp, {
 		status: 201,
 		headers: {
+			"access-control-allow-headers": "content-type,authorization,if-match",
+			"access-control-allow-methods": "PATCH,POST,PUT,DELETE,OPTIONS",
+			"access-control-allow-origin": "*",
+			"access-control-expose-headers": "x-thunderclap,location,link,accept-post,accept-patch,etag",
 			'content-type': "application/sdp",
 			'protocol-version': "draft-ietf-wish-whip-06",
 			etag: `"${newSessionResult.sessionId}"`,
@@ -128,23 +147,26 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 		case 'POST':
 			break
 		case 'DELETE':
-			return new Response("OK")
-		case 'PATCH':
-			const sessionId = groups[2]
-			const renegotiateBody = {
-				"sessionDescription": {
-					"type": "answer",
-					"sdp": await request.text()
-				}
-			}
-			const renegotiateResponse = await fetch(`${CallsEndpoint}/sessions/${sessionId}/renegotiate`, {
-				method: 'PUT',
-				headers: CallsEndpointHeaders,
-				body: JSON.stringify(renegotiateBody),
+			// TODO: Actually call the close API
+			return new Response(null, {
+				status: 204,
+				headers: {
+					"access-control-allow-headers": "content-type,authorization,if-match",
+					"access-control-allow-methods": "PATCH,POST,PUT,DELETE,OPTIONS",
+					"access-control-allow-origin": "*",
+					"access-control-expose-headers": "x-thunderclap,location,link,accept-post,accept-patch,etag",
+				},
 			})
-			return new Response(null, {status: renegotiateResponse.status, headers: {
-				"access-control-allow-origin": "*"
-			}})
+		case 'PATCH':
+			return new Response(null, {
+				status: 501,
+				headers: {
+					"access-control-allow-headers": "content-type,authorization,if-match",
+					"access-control-allow-methods": "PATCH,POST,PUT,DELETE,OPTIONS",
+					"access-control-allow-origin": "*",
+					"access-control-expose-headers": "x-thunderclap,location,link,accept-post,accept-patch,etag",
+				},
+			})
 		default:
 			return new Response("Not supported", {status: 400})
 	}
@@ -176,7 +198,7 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 			"access-control-expose-headers": "location",
 			"access-control-allow-origin": "*",
 			'content-type': "application/sdp",
-			'protocol-version': "draft-ietf-wish-whep-00",
+			'protocol-version': "draft-ietf-wish-whep",
 			"etag": `"${newSessionResult.sessionId}"`,
 			"location": `/play/${liveId}/${newSessionResult.sessionId}`,
 		},

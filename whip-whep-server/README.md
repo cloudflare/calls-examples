@@ -41,4 +41,7 @@ The play endpoint will look like \<deployed-domain\>/play/\<stream-name\>
 Example: http://your-domain.com/play/my-live
 
 ## Bonus: WHEP player
-A basic WHEP player can be found under the directory wish-whep-00-player/
+
+A simple player is provided for testing: https://wish.chens.link/watch
+
+Try using Firefox if Chrome is having issues with codec
