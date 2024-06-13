@@ -115,9 +115,13 @@ async function whipHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 
 async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, parsedURL: URL): Promise<Response> 
 {
+	const corsHeaders = {"access-control-allow-origin": "*"}
 	const groups = /\/play\/([\w-]+)\/?([\w-]+)?/g.exec(parsedURL.pathname)
 	if(!groups || groups.length < 2) {
-		return new Response("not found", {status: 404})
+		return new Response("not found", {
+			status: 404, 
+			headers: corsHeaders
+		})
 	}
 	const liveId = groups[1]
 	const CallsEndpoint = `${env.CALLS_API}/v1/apps/${env.CALLS_APP_ID}`
@@ -142,16 +146,23 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 				headers: CallsEndpointHeaders,
 				body: JSON.stringify(renegotiateBody),
 			})
-			return new Response(null, {status: renegotiateResponse.status, headers: {
-				"access-control-allow-origin": "*"
-			}})
+			return new Response(null, {
+				status: renegotiateResponse.status, 
+				headers: corsHeaders
+			})
 		default:
-			return new Response("Not supported", {status: 400})
+			return new Response("Not supported", {
+				status: 404, 
+				headers: corsHeaders
+			})
 	}
 	let stub = env.LIVE_STORE.get(env.LIVE_STORE.idFromName(liveId))
 	const tracks = await stub.getTracks() as TrackLocator[]
 	if(tracks.length == 0) {
-		return new Response("Live not started yet", {status: 404})
+		return new Response("Live not started yet", {
+			status: 404, 
+			headers: corsHeaders
+		})
 	}
 	const newSessionResult = await (await fetch(`${CallsEndpoint}/sessions/new`, {method: 'POST', headers: CallsEndpointHeaders})).json() as NewSessionResponse
 	const remoteOffer = await request.text()
@@ -174,11 +185,11 @@ async function whepHandler(request: Request, env: Env, ctx: ExecutionContext, pa
 		status: 201,
 		headers: {
 			"access-control-expose-headers": "location",
-			"access-control-allow-origin": "*",
 			'content-type': "application/sdp",
 			'protocol-version': "draft-ietf-wish-whep-00",
 			"etag": `"${newSessionResult.sessionId}"`,
 			"location": `/play/${liveId}/${newSessionResult.sessionId}`,
+			... corsHeaders
 		},
 	})
 }
