@@ -147,15 +147,6 @@
                 bundlePolicy: "max-bundle",
             });
 
-            // in order for the ICE connection to be established, there must
-            // be at least one track present, but since we want each peer
-            // connection and session to have tracks explicitly pushed and
-            // pulled, we can add an empty audio track here to force the
-            // connection to be established.
-            peerConnection.addTransceiver("audio", {
-                direction: "inactive",
-            });
-
             const dc = peerConnection.createDataChannel("server-events");
 
             // create an offer and set it as the local description
