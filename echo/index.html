@@ -55,34 +55,35 @@
 
       // First, we'll establish the "local" Calls session by calling createCallsSession
       // which is defined towards the bottom of this script. This will create an
-      // RTCPeerConnection and a Calls session, and connect the two.
-      const localSession = await createCallsSession();
+      // a Calls session, and return the session ID.
+      const localSessionId = await createCallsSession();
+
+      // Then we create a simple RTCPeerConnection with some standard parameters.
+      const localPeerConnection = await createPeerConnection();
 
       // Next we need to push our audio and video tracks. We will add them to the peer
       // connection using the addTransceiver API which allows us to specify the direction
       const transceivers = media.getTracks().map((track) =>
-        localSession.peerConnection.addTransceiver(track, {
+        localPeerConnection.addTransceiver(track, {
           direction: "sendonly",
         }),
       );
 
-      // Now that the peer connection has tracks, the next step is to create and set a
-      // new offer as the local description. This offer will contain the new tracks in
-      // its session description.
-      await localSession.peerConnection.setLocalDescription(
-        await localSession.peerConnection.createOffer(),
-      );
+      // Now that the peer connection has tracks we create an SDP offer.
+      const localOffer = await localPeerConnection.createOffer();
+      // And apply that offer as the local description.
+      await localPeerConnection.setLocalDescription(localOffer);
 
       // Send the local session description to the Calls API, it will
       // respond with an answer and trackIds.
       const pushTracksResponse = await fetch(
-        `${API_BASE}/sessions/${localSession.sessionId}/tracks/new`,
+        `${API_BASE}/sessions/${localSessionId}/tracks/new`,
         {
           method: "POST",
           headers,
           body: JSON.stringify({
             sessionDescription: {
-              sdp: localSession.peerConnection.localDescription?.sdp,
+              sdp: localOffer.sdp,
               type: "offer",
             },
             tracks: transceivers.map(({ mid, sender }) => ({
@@ -94,11 +95,38 @@
         },
       ).then((res) => res.json());
 
+      // Setting up the ICE connection state handler needs to happen before
+      // setting the remote description to avoid race conditions.
+      const connected = new Promise((res, rej) => {
+        // timeout after 5s
+        setTimeout(rej, 5000);
+        const iceConnectionStateChangeHandler = () => {
+          if (localPeerConnection.iceConnectionState === "connected") {
+            localPeerConnection.removeEventListener(
+              "iceconnectionstatechange",
+              iceConnectionStateChangeHandler,
+            );
+            res(undefined);
+          }
+        };
+        localPeerConnection.addEventListener(
+          "iceconnectionstatechange",
+          iceConnectionStateChangeHandler,
+        );
+      });
+
       // We take the answer we got from the Calls API and set it as the
-      // peer connection's remote description.
-      await localSession.peerConnection.setRemoteDescription(
+      // peer connection's remote description, which is an answer in this case.
+      await localPeerConnection.setRemoteDescription(
         new RTCSessionDescription(pushTracksResponse.sessionDescription),
       );
+
+      // Wait until the peer connection's iceConnectionState is "connected"
+      await connected;
+
+      // ===================================================================
+      // The local PeerConnection is sending to Calls now
+      // ===================================================================
 
       // 🌀🌀🌀
       // At this point, we're done with the sending "local" side, and
@@ -106,21 +134,22 @@
       // tab to receive on the "remote" side, and have received the
       // session id and track information to pull via some signalling
       // method such as WebSockets.
-      const localSessionId = localSession.sessionId;
       const tracksToPull = transceivers.map(({ sender }) => ({
         location: "remote",
         trackName: sender.track?.id,
         sessionId: localSessionId,
       }));
 
-      // Let's create the remoteSession now to pull the tracks
-      const remoteSession = await createCallsSession();
+      // Let's create a new remoteSession now to pull the tracks.
+      const remoteSessionId = await createCallsSession();
+      // The remote session also needs its own PeerConnection.
+      const remotePeerConnection = await createPeerConnection();
 
       // We're going to modify the remote session and pull these tracks
       // by requesting an offer from the Calls API with the tracks we
       // want to pull.
       const pullResponse = await fetch(
-        `${API_BASE}/sessions/${remoteSession.sessionId}/tracks/new`,
+        `${API_BASE}/sessions/${remoteSessionId}/tracks/new`,
         {
           method: "POST",
           headers,
@@ -140,13 +169,13 @@
               setTimeout(rej, 5000);
               const handleTrack = ({ transceiver, track }) => {
                 if (transceiver.mid !== mid) return;
-                remoteSession.peerConnection.removeEventListener(
+                remotePeerConnection.removeEventListener(
                   "track",
                   handleTrack,
                 );
                 res(track);
               };
-              remoteSession.peerConnection.addEventListener(
+              remotePeerConnection.addEventListener(
                 "track",
                 handleTrack,
               );
@@ -158,22 +187,22 @@
       if (pullResponse.requiresImmediateRenegotiation) {
         // We got a session description from the remote in the response,
         // we need to set it as the remote description
-        remoteSession.peerConnection.setRemoteDescription(
+        await remotePeerConnection.setRemoteDescription(
           pullResponse.sessionDescription,
         );
-        // Create and set the answer as local description
-        await remoteSession.peerConnection.setLocalDescription(
-          await remoteSession.peerConnection.createAnswer(),
-        );
+        // Create an answer
+        const remoteAnswer = await remotePeerConnection.createAnswer();
+        // And set it as local description
+        await remotePeerConnection.setLocalDescription(remoteAnswer);
         // Send our answer back to the Calls API
         const renegotiateResponse = await fetch(
-          `${API_BASE}/sessions/${remoteSession.sessionId}/renegotiate`,
+          `${API_BASE}/sessions/${remoteSessionId}/renegotiate`,
           {
             method: "PUT",
             headers,
             body: JSON.stringify({
               sessionDescription: {
-                sdp: remoteSession.peerConnection.currentLocalDescription?.sdp,
+                sdp: remoteAnswer.sdp,
                 type: "answer",
               },
             }),
@@ -197,9 +226,24 @@
       // ===============================================================
 
       /**
-       * Creates a peer connection and connects it to a new Calls session
+       * Creates a new Calls session
        */
       async function createCallsSession() {
+        const sessionResponse = await fetch(
+          `${API_BASE}/sessions/new`,
+          {
+            method: "POST",
+            headers,
+          },
+        ).then((res) => res.json());
+
+        return sessionResponse.sessionId;
+      }
+
+      /**
+       * Creates a peer connection with some default settings
+       */
+      async function createPeerConnection() {
         const peerConnection = new RTCPeerConnection({
           iceServers: [
             {
@@ -209,55 +253,7 @@
           bundlePolicy: "max-bundle",
         });
 
-        // in order for the ICE connection to be established, there must
-        // be at least one track present, but since we want each peer
-        // connection and session to have tracks explicitly pushed and
-        // pulled, we can add an empty audio track here to force the
-        // connection to be established.
-        peerConnection.addTransceiver("audio", {
-          direction: "inactive",
-        });
-
-        // create an offer and set it as the local description
-        await peerConnection.setLocalDescription(
-          await peerConnection.createOffer(),
-        );
-        const { sessionId, sessionDescription } = await fetch(
-          `${API_BASE}/sessions/new`,
-          {
-            method: "POST",
-            headers,
-            body: JSON.stringify({
-              sessionDescription: peerConnection.localDescription,
-            }),
-          },
-        ).then((res) => res.json());
-        const connected = new Promise((res, rej) => {
-          // timeout after 5s
-          setTimeout(rej, 5000);
-          const iceConnectionStateChangeHandler = () => {
-            if (peerConnection.iceConnectionState === "connected") {
-              peerConnection.removeEventListener(
-                "iceconnectionstatechange",
-                iceConnectionStateChangeHandler,
-              );
-              res(undefined);
-            }
-          };
-          peerConnection.addEventListener(
-            "iceconnectionstatechange",
-            iceConnectionStateChangeHandler,
-          );
-        });
-
-        // Once both local and remote descriptions are set, the ICE process begins
-        await peerConnection.setRemoteDescription(sessionDescription);
-        // Wait until the peer connection's iceConnectionState is "connected"
-        await connected;
-        return {
-          peerConnection,
-          sessionId,
-        };
+        return peerConnection;
       }
     </script>
     <style>
