@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Realtime WebRTC API</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        :root {
+            --primary-color: #2563eb;
+            --background-color: #f8fafc;
+            --text-color: #1e293b;
+            --border-color: #e2e8f0;
+        }
+
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.5;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+            background: var(--background-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .info-section {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .info-section h2 {
+            margin-top: 0;
+            color: var(--text-color);
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .info-section ul {
+            margin: 0;
+            padding-left: 1.5rem;
+        }
+
+        .info-section li {
+            margin-bottom: 0.75rem;
+            line-height: 1.6;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+
+        input[type="text"], textarea, select {
+            width: 100%;
+            padding: 0.5rem;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 1.5rem;
+            border-radius: 4px;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background-color: #1d4ed8;
+        }
+
+        .audio-controls {
+            margin-top: 2rem;
+            display: none;
+        }
+
+        .audio-controls > div {
+            margin-bottom: 1rem;
+        }
+
+        audio {
+            width: 100%;
+        }
+
+        #logs-section {
+            display: none;
+        }
+
+        #logs {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: white;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        #logs div {
+            padding: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        #logs div:last-child {
+            border-bottom: none;
+        }
+
+        h2 {
+            color: var(--text-color);
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="info-section">
+        <h2>About This Demo</h2>
+        <ul>
+            <li>This example demonstrates how to relay both HTTP signaling and WebRTC traffic through Cloudflare.</li>
+            <li>Authentication can be integrated into the realtime API, providing secure access control to the WebRTC endpoints.</li>
+            <li>A fanout system can be integrated easily though Cloudflare Calls enabling multiple users interacting with the AI model</li>
+            <li>The system uses Cloudflare Calls to relay UDP traffic to/from OpenAI, handing the WebRTC traffic at the Cloudflare edge close to OpenAI and the browser. This architecture handles data relay across the Cloudflare backbone instead of public internet.</li>
+        </ul>
+    </div>
+
+    <div class="container">
+        <div class="form-group">
+            <label for="apiEndpointInput">OpenAI API Endpoint</label>
+            <input type="text" id="apiEndpointInput" size="64">
+        </div>
+
+        <div class="form-group">
+            <div class="checkbox-group">
+                <input type="checkbox" id="receiveTextInput">
+                <label for="receiveTextInput">Receive Text</label>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="receiveAudioInput" checked>
+                <label for="receiveAudioInput">Receive Audio</label>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="instructionsTextarea">Instructions</label>
+            <textarea id="instructionsTextarea"></textarea>
+        </div>
+
+        <div class="form-group">
+            <label for="voiceSelect">Voice</label>
+            <select id="voiceSelect">
+                <option value="">Select a voice</option>
+                <option value="alloy">Alloy</option>
+                <option value="ash">Ash</option>
+                <option value="ballad">Ballad</option>
+                <option value="coral">Coral</option>
+                <option value="echo">Echo</option>
+                <option value="sage">Sage</option>
+                <option value="shimmer">Shimmer</option>
+                <option value="verse">Verse</option>
+            </select>
+        </div>
+
+        <button type="button" onclick="window.startSession()">Start Session</button>
+
+        <div id="audioElements" class="audio-controls">
+            <div>
+                <label>Local Audio</label>
+                <audio id="localAudio" autoplay muted controls></audio>
+            </div>
+            <div>
+                <label>Remote Audio</label>
+                <audio id="remoteAudio" autoplay controls></audio>
+            </div>
+        </div>
+    </div>
+
+    <div id="logs-section">
+        <h2>Logs</h2>
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        // Get the current origin and append /endpoint
+        const defaultEndpoint = `${window.location.origin}/endpoint`;
+        document.getElementById('apiEndpointInput').value = defaultEndpoint;
+
+        function appendLog(logMsg) {
+            const logsSection = document.getElementById('logs-section');
+            const logsContainer = document.getElementById('logs');
+            
+            // Show logs section if it's hidden
+            if (logsSection.style.display === 'none' || logsSection.style.display === '') {
+                logsSection.style.display = 'block';
+            }
+            
+            logsContainer.innerHTML += `<div>${logMsg}</div>`;
+        }
+
+        window.startSession = () => {
+            const apiEndpoint = new URL(document.getElementById('apiEndpointInput').value)
+            localStorage.setItem('api-endpoint', apiEndpoint.toString())
+
+            const peerConnection = new RTCPeerConnection()
+
+            if (document.getElementById('receiveTextInput').checked) {
+                window.dataChannel = peerConnection.createDataChannel('response')
+                window.dataChannel.onmessage = event => {
+                    appendLog(event.data)
+                }
+            }
+
+            peerConnection.ontrack = e => {
+                document.getElementById('remoteAudio').srcObject = e.streams[0]
+            }
+
+            peerConnection.oniceconnectionstatechange = (ev) => {
+                appendLog(`WebRTC session is now ${peerConnection.iceConnectionState}`)
+            }
+
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    document.getElementById('audioElements').style.display = 'block'
+                    document.getElementById('localAudio').srcObject = stream
+                    const receiveAudio = document.getElementById('receiveAudioInput').checked
+                    stream.getTracks().forEach(track => peerConnection.addTransceiver(track, {direction: receiveAudio ? 'sendrecv' : 'sendonly'}))
+
+                    peerConnection.createOffer().then(offer => {
+                        peerConnection.setLocalDescription(offer)
+
+                        const instructions = document.getElementById('instructionsTextarea').value
+                        if (instructions !== '') {
+                            apiEndpoint.searchParams.set('instructions', instructions);
+                        }
+
+                        const voice = document.getElementById('voiceSelect').value
+                        if (voice !== '') {
+                            apiEndpoint.searchParams.set('voice', voice);
+                        }
+
+                        fetch(apiEndpoint.toString(), {
+                            method: 'POST',
+                            body: offer.sdp,
+                            headers: {
+                                'Content-Type': 'application/sdp'
+                            }
+                        }).then(r => r.text())
+                            .then(answer => {
+                                peerConnection.setRemoteDescription({
+                                    sdp: answer,
+                                    type: 'answer'
+                                })
+                            })
+                    })
+                })
+        }
+    </script>
+</body>
+</html>

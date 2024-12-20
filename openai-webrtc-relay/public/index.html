@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<!-- saved from url=(0073)https://glowing-adventure-wgj49rm.pages.github.io/realtimeapi/webrtc.html -->
+<html><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title> Realtime WebRTC API </title>
+  </head>
+
+  <body>
+    <div>
+      OpenAI API Endpoint: <input type="text" id="apiEndpointInput" size="64"> <br>
+      Receive Text:        <input type="checkbox" id="receiveTextInput"> <br>
+      Receive Audio:       <input type="checkbox" id="receiveAudioInput" checked="checked"> <br>
+      Instructions:        <textarea id="instructionsTextarea"></textarea> <br>
+      Voice:               <select id="voiceSelect">
+                             <option value=""></option>
+                             <option value="alloy">alloy</option>
+                             <option value="ash">ash</option>
+                             <option value="ballad">ballad</option>
+                             <option value="coral">coral</option>
+                             <option value="echo">echo</option>
+                             <option value="sage">sage</option>
+                             <option value="shimmer">shimmer</option>
+                             <option value="verse">verse</option>
+                           </select>
+      <br>
+      <button type="button" onclick="window.startSession()">Start Session</button>
+    </div>
+
+    <div id="audioElements" style="display: none">
+      <div>
+        Local Audio: <audio id="localAudio" autoplay="" muted="" controls=""></audio>
+      </div>
+      <div>
+        Remote Audio: <audio id="remoteAudio" autoplay="" controls=""></audio>
+      </div>
+    </div>
+
+    <h2> Logs </h2>
+    <div id="logs"></div>
+
+
+  <script>
+    const defaultEndpoint = `${window.location.origin}/endpoint`;
+
+    document.getElementById('apiEndpointInput').value = defaultEndpoint
+
+    function appendLog(logMsg) {
+      document.getElementById('logs').innerHTML += `<div> ${logMsg} </div>`
+    }
+
+    window.startSession = () => {
+      const apiEndpoint = new URL(document.getElementById('apiEndpointInput').value)
+      localStorage.setItem('api-endpoint', apiEndpoint.toString())
+
+      const peerConnection = new RTCPeerConnection()
+
+      if (document.getElementById('receiveTextInput').checked) {
+        window.dataChannel = peerConnection.createDataChannel('response')
+        window.dataChannel.onmessage = event => {
+          appendLog(event.data)
+        }
+      }
+
+      peerConnection.ontrack = e => {
+        document.getElementById('remoteAudio').srcObject = e.streams[0]
+      }
+
+      peerConnection.oniceconnectionstatechange = (ev) => {
+        appendLog(`WebRTC session is now ${peerConnection.iceConnectionState}`)
+      }
+
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          document.getElementById('audioElements').style.display = 'block'
+          document.getElementById('localAudio').srcObject = stream
+          const receiveAudio = document.getElementById('receiveAudioInput').checked
+          stream.getTracks().forEach(track => peerConnection.addTransceiver(track, {direction:  receiveAudio ? 'sendrecv' : 'sendonly'}))
+
+          peerConnection.createOffer().then(offer => {
+            peerConnection.setLocalDescription(offer)
+
+            const instructions =  document.getElementById('instructionsTextarea').value
+            if (instructions !== '') {
+              apiEndpoint.searchParams.set('instructions', instructions);
+            }
+
+            const voice =  document.getElementById('voiceSelect').value
+            if (voice !== '') {
+              apiEndpoint.searchParams.set('voice', voice);
+            }
+
+            fetch(apiEndpoint.toString(), {
+              method: 'POST',
+              body: offer.sdp,
+              headers: {
+                'Content-Type': 'application/sdp'
+              }
+            }).then(r => r.text())
+              .then(answer => {
+                peerConnection.setRemoteDescription({
+                  sdp: answer,
+                  type: 'answer'
+                })
+              })
+          })
+        })
+    }
+  </script>
+
+</body></html>
