@@ -67,7 +67,8 @@
         const trackInit = { direction: 'sendonly' }
         // If the track is a video track we are going to enable three simulcast layers.
         // You can name the RIDs how ever you like, but the automatic modes of the SFU
-        // expects to be able to sort them alphabetically.
+        // expects to be able to sort them asciibetically, where it is assumed that 'a'
+        // represents the highest quality layer and 'z' the lowest quality.
         if (track.kind === 'video') {
           trackInit.sendEncodings = [
             { rid: 'f', scaleResolutionDownBy: 1.0 },
