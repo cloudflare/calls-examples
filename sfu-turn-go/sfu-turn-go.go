@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,80 @@ type TurnResponse struct {
 	IceServers []IceServer `json:"iceServers"`
 }
 
+type SessionDescription struct {
+	Type string `json:"type"`
+	Sdp  string `json:"sdp"`
+}
+
+// SessionResponse represents the top-level JSON structure.
+type SessionResponse struct {
+	SessionId   string             `json:"sessionId"`
+	Description SessionDescription `json:"sessionDescription"`
+}
+
+type DataChannelRequest struct {
+	Location        string  `json:"location"`
+	DataChannelName string  `json:"dataChannelName"`
+	SessionId       *string `json:"sessionId,omitempty"`
+}
+
+type DataChannelRequests struct {
+	DataChannels []DataChannelRequest `json:"dataChannels"`
+}
+
+type DataChannelResponse struct {
+	Location        string `json:"location"`
+	DataChannelName string `json:"dataChannelName"`
+	Id              uint16 `json:"id"`
+}
+
+type DataChannelResponses struct {
+	DataChannels []DataChannelResponse `json:"dataChannels"`
+}
+
+// apiCaller makes a generic HTTP API call and unmarshals the response.
+func httpApiCaller(url, apiToken string, reqBody interface{}, expectedStatusCode int, respData interface{}) error {
+	var reqBodyReader io.Reader
+	if reqBody != nil {
+		jsonBody, err := json.Marshal(reqBody)
+		if err != nil {
+			return fmt.Errorf("failed to marshal request body: %w", err)
+		}
+		reqBodyReader = bytes.NewBuffer(jsonBody)
+	}
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, reqBodyReader)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != expectedStatusCode {
+		return fmt.Errorf("API request failed with status %s (%d): %s", resp.Status, resp.StatusCode, string(bodyBytes))
+	}
+
+	if respData != nil {
+		if err := json.Unmarshal(bodyBytes, respData); err != nil {
+			return fmt.Errorf("failed to unmarshal response body: %w", err)
+		}
+	}
+	return nil
+}
+
 // Helper function to fetch TURN credentials from Cloudflare API.
 func getCloudflareTurnCredentials(apiToken, accountID string) (string, string, error) {
 	// API endpoint for TURN credentials.
@@ -36,48 +111,11 @@ func getCloudflareTurnCredentials(apiToken, accountID string) (string, string, e
 	requestBody := map[string]interface{}{
 		"ttl": 86400, // Time-to-live in seconds (24 hours)
 	}
-	requestBodyJSON, err := json.Marshal(requestBody)
-	if err != nil {
-		return "", "", fmt.Errorf("error marshalling request body: %w", err)
-	}
-
-	// Create an HTTP request.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(string(requestBodyJSON)))
-	if err != nil {
-		return "", "", fmt.Errorf("error creating HTTP request: %w", err)
-	}
-
-	// Set the authorization header with the API token.
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
-	req.Header.Set("Content-Type", "application/json") // Add content type header
-
-	// Create an HTTP client and send the request.
-	client := &http.Client{
-		Timeout: 10 * time.Second, // set timeout
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("error sending HTTP request: %w", err)
-	}
-	defer resp.Body.Close() // ensure body is closed
-
-	// Read the response body.
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("error reading response body: %w", err)
-	}
-
-	// Check the response status code.
-	if resp.StatusCode != http.StatusCreated {
-		return "", "", fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
-	}
-
-	// Unmarshal the JSON data into the 'response' struct.
 	var response TurnResponse
-	err = json.Unmarshal(body, &response)
+
+	err := httpApiCaller(endpoint, apiToken, requestBody, http.StatusCreated, &response)
 	if err != nil {
-		return "", "", fmt.Errorf("error unmarshalling JSON response: %w", err)
+		return "", "", fmt.Errorf("error making TURN HTTP API call: %v", err)
 	}
 
 	var username, credential string
@@ -93,6 +131,70 @@ func getCloudflareTurnCredentials(apiToken, accountID string) (string, string, e
 	}
 
 	return username, credential, nil
+}
+
+func getCloudflareSfuSession(apiToken, appId, sdp string) (string, string, error) {
+	// API endpoint for SFU session.
+	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/new", appId)
+
+	// Request body for the data channels API.
+	requestBody := map[string]interface{}{
+		"sessionDescription": SessionDescription{
+			Type: "offer",
+			Sdp:  sdp,
+		},
+	}
+	var response SessionResponse
+
+	err := httpApiCaller(endpoint, apiToken, requestBody, http.StatusCreated, &response)
+	if err != nil {
+		return "", "", fmt.Errorf("error making SFU session HTTP API call: %v", err)
+	}
+
+	return response.SessionId, response.Description.Sdp, nil
+}
+
+func publishDataChannel(apiToken, appId, sessionId, channelName string) (uint16, error) {
+	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/%s/datachannels/new", appId, sessionId)
+
+	// Request body for the data channels API.
+	dataChannel := DataChannelRequest{
+		Location:        "local",
+		DataChannelName: channelName,
+	}
+	requestBody := DataChannelRequests{
+		DataChannels: []DataChannelRequest{dataChannel},
+	}
+	var response DataChannelResponses
+
+	err := httpApiCaller(endpoint, apiToken, requestBody, http.StatusOK, &response)
+	if err != nil {
+		return 0, fmt.Errorf("error making data channel publish HTTP API call: %v", err)
+	}
+
+	return response.DataChannels[0].Id, nil
+}
+
+func subscribeDataChannel(apiToken, appId, sessionId, remoteSessionId, channelName string) (uint16, error) {
+	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/%s/datachannels/new", appId, sessionId)
+
+	// Request body for the data channels API.
+	dataChannel := DataChannelRequest{
+		Location:        "remote",
+		DataChannelName: channelName,
+		SessionId:       &remoteSessionId,
+	}
+	requestBody := DataChannelRequests{
+		DataChannels: []DataChannelRequest{dataChannel},
+	}
+	var response DataChannelResponses
+
+	err := httpApiCaller(endpoint, apiToken, requestBody, http.StatusOK, &response)
+	if err != nil {
+		return 0, fmt.Errorf("error making data channel subscribe HTTP API call: %v", err)
+	}
+
+	return response.DataChannels[0].Id, nil
 }
 
 func createNewWebrtcConfiguration(apiToken string, accountID string) webrtc.Configuration {
@@ -121,215 +223,6 @@ func createNewWebrtcConfiguration(apiToken string, accountID string) webrtc.Conf
 		},
 		ICETransportPolicy: webrtc.ICETransportPolicyRelay, // Enforce relay-only.
 	}
-}
-
-type SessionDescription struct {
-	Type string `json:"type"`
-	Sdp  string `json:"sdp"`
-}
-
-// SessionResponse represents the top-level JSON structure.
-type SessionResponse struct {
-	SessionId   string             `json:"sessionId"`
-	Description SessionDescription `json:"sessionDescription"`
-}
-
-func getCloudflareSfuSession(apiToken, appId, sdp string) (string, string, error) {
-	// API endpoint for SFU session.
-	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/new", appId)
-
-	// Request body for the data channels API.
-	requestBody := map[string]interface{}{
-		"sessionDescription": SessionDescription{
-			Type: "offer",
-			Sdp:  sdp,
-		},
-	}
-	requestBodyJSON, err := json.Marshal(requestBody)
-	if err != nil {
-		return "", "", fmt.Errorf("error marshalling request body: %w", err)
-	}
-
-	// Create an HTTP request.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(string(requestBodyJSON)))
-	if err != nil {
-		return "", "", fmt.Errorf("error creating HTTP request: %w", err)
-	}
-
-	// Set the authorization header with the API token.
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
-	req.Header.Set("Content-Type", "application/json") // Add content type header
-
-	// Create an HTTP client and send the request.
-	client := &http.Client{
-		Timeout: 10 * time.Second, // set timeout
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("error sending HTTP request: %w", err)
-	}
-	defer resp.Body.Close() // ensure body is closed
-
-	// Read the response body.
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "", fmt.Errorf("error reading response body: %w", err)
-	}
-
-	// Check the response status code.
-	if resp.StatusCode != http.StatusCreated {
-		return "", "", fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
-	}
-
-	// Unmarshal the JSON data into the 'response' struct.
-	var response SessionResponse
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		return "", "", fmt.Errorf("error unmarshalling JSON response: %w", err)
-	}
-
-	return response.SessionId, response.Description.Sdp, nil
-}
-
-type DataChannelRequest struct {
-	Location        string  `json:"location"`
-	DataChannelName string  `json:"dataChannelName"`
-	SessionId       *string `json:"sessionId,omitempty"`
-}
-
-type DataChannelRequests struct {
-	DataChannels []DataChannelRequest `json:"dataChannels"`
-}
-
-type DataChannelResponse struct {
-	Location        string `json:"location"`
-	DataChannelName string `json:"dataChannelName"`
-	Id              uint16 `json:"id"`
-}
-
-type DataChannelResponses struct {
-	DataChannels []DataChannelResponse `json:"dataChannels"`
-}
-
-func publishDataChannel(apiToken, appId, sessionId, channelName string) (uint16, error) {
-	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/%s/datachannels/new", appId, sessionId)
-
-	// Request body for the data channels API.
-	dataChannel := DataChannelRequest{
-		Location:        "local",
-		DataChannelName: channelName,
-	}
-	requestBody := DataChannelRequests{
-		DataChannels: []DataChannelRequest{dataChannel},
-	}
-
-	requestBodyJSON, err := json.Marshal(requestBody)
-	if err != nil {
-		return 0, fmt.Errorf("error marshalling request body: %w", err)
-	}
-
-	// Create an HTTP request.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(string(requestBodyJSON)))
-	if err != nil {
-		return 0, fmt.Errorf("error creating HTTP request: %w", err)
-	}
-
-	// Set the authorization header with the API token.
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
-	req.Header.Set("Content-Type", "application/json") // Add content type header
-
-	// Create an HTTP client and send the request.
-	client := &http.Client{
-		Timeout: 10 * time.Second, // set timeout
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("error sending HTTP request: %w", err)
-	}
-	defer resp.Body.Close() // ensure body is closed
-
-	// Read the response body.
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("error reading response body: %w", err)
-	}
-
-	// Check the response status code.
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
-	}
-
-	// Unmarshal the JSON data into the 'response' struct.
-	var response DataChannelResponses
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		return 0, fmt.Errorf("error unmarshalling JSON response: %w", err)
-	}
-
-	return response.DataChannels[0].Id, nil
-
-}
-
-func subscribeDataChannel(apiToken, appId, sessionId, remoteSessionId, channelName string) (uint16, error) {
-	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/%s/datachannels/new", appId, sessionId)
-
-	// Request body for the data channels API.
-	dataChannel := DataChannelRequest{
-		Location:        "remote",
-		DataChannelName: channelName,
-		SessionId:       &remoteSessionId,
-	}
-	requestBody := DataChannelRequests{
-		DataChannels: []DataChannelRequest{dataChannel},
-	}
-
-	requestBodyJSON, err := json.Marshal(requestBody)
-	if err != nil {
-		return 0, fmt.Errorf("error marshalling request body: %w", err)
-	}
-
-	// Create an HTTP request.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(string(requestBodyJSON)))
-	if err != nil {
-		return 0, fmt.Errorf("error creating HTTP request: %w", err)
-	}
-
-	// Set the authorization header with the API token.
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
-	req.Header.Set("Content-Type", "application/json") // Add content type header
-
-	// Create an HTTP client and send the request.
-	client := &http.Client{
-		Timeout: 10 * time.Second, // set timeout
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("error sending HTTP request: %w", err)
-	}
-	defer resp.Body.Close() // ensure body is closed
-
-	// Read the response body.
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, fmt.Errorf("error reading response body: %w", err)
-	}
-
-	// Check the response status code.
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
-	}
-
-	// Unmarshal the JSON data into the 'response' struct.
-	var response DataChannelResponses
-	err = json.Unmarshal(body, &response)
-	if err != nil {
-		return 0, fmt.Errorf("error unmarshalling JSON response: %w", err)
-	}
-
-	return response.DataChannels[0].Id, nil
 }
 
 func main() {
