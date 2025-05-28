@@ -135,7 +135,7 @@ type SessionResponse struct {
 }
 
 func getCloudflareSfuSession(apiToken, appId, sdp string) (string, string, error) {
-	// API endpoint for TURN credentials.
+	// API endpoint for SFU session.
 	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/new", appId)
 
 	// Request body for the data channels API.
@@ -177,8 +177,6 @@ func getCloudflareSfuSession(apiToken, appId, sdp string) (string, string, error
 		return "", "", fmt.Errorf("error reading response body: %w", err)
 	}
 
-	fmt.Printf("==== body: %v\n", string(body))
-
 	// Check the response status code.
 	if resp.StatusCode != http.StatusCreated {
 		return "", "", fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
@@ -194,6 +192,146 @@ func getCloudflareSfuSession(apiToken, appId, sdp string) (string, string, error
 	return response.SessionId, response.Description.Sdp, nil
 }
 
+type DataChannelRequest struct {
+	Location        string  `json:"location"`
+	DataChannelName string  `json:"dataChannelName"`
+	SessionId       *string `json:"sessionId,omitempty"`
+}
+
+type DataChannelRequests struct {
+	DataChannels []DataChannelRequest `json:"dataChannels"`
+}
+
+type DataChannelResponse struct {
+	Location        string `json:"location"`
+	DataChannelName string `json:"dataChannelName"`
+	Id              uint16 `json:"id"`
+}
+
+type DataChannelResponses struct {
+	DataChannels []DataChannelResponse `json:"dataChannels"`
+}
+
+func publishDataChannel(apiToken, appId, sessionId, channelName string) (uint16, error) {
+	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/%s/datachannels/new", appId, sessionId)
+
+	// Request body for the data channels API.
+	dataChannel := DataChannelRequest{
+		Location:        "local",
+		DataChannelName: channelName,
+	}
+	requestBody := DataChannelRequests{
+		DataChannels: []DataChannelRequest{dataChannel},
+	}
+
+	requestBodyJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return 0, fmt.Errorf("error marshalling request body: %w", err)
+	}
+
+	// Create an HTTP request.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(string(requestBodyJSON)))
+	if err != nil {
+		return 0, fmt.Errorf("error creating HTTP request: %w", err)
+	}
+
+	// Set the authorization header with the API token.
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
+	req.Header.Set("Content-Type", "application/json") // Add content type header
+
+	// Create an HTTP client and send the request.
+	client := &http.Client{
+		Timeout: 10 * time.Second, // set timeout
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("error sending HTTP request: %w", err)
+	}
+	defer resp.Body.Close() // ensure body is closed
+
+	// Read the response body.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("error reading response body: %w", err)
+	}
+
+	// Check the response status code.
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
+	}
+
+	// Unmarshal the JSON data into the 'response' struct.
+	var response DataChannelResponses
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return 0, fmt.Errorf("error unmarshalling JSON response: %w", err)
+	}
+
+	return response.DataChannels[0].Id, nil
+
+}
+
+func subscribeDataChannel(apiToken, appId, sessionId, remoteSessionId, channelName string) (uint16, error) {
+	endpoint := fmt.Sprintf("https://rtc.live.cloudflare.com/v1/apps/%s/sessions/%s/datachannels/new", appId, sessionId)
+
+	// Request body for the data channels API.
+	dataChannel := DataChannelRequest{
+		Location:        "remote",
+		DataChannelName: channelName,
+		SessionId:       &remoteSessionId,
+	}
+	requestBody := DataChannelRequests{
+		DataChannels: []DataChannelRequest{dataChannel},
+	}
+
+	requestBodyJSON, err := json.Marshal(requestBody)
+	if err != nil {
+		return 0, fmt.Errorf("error marshalling request body: %w", err)
+	}
+
+	// Create an HTTP request.
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, strings.NewReader(string(requestBodyJSON)))
+	if err != nil {
+		return 0, fmt.Errorf("error creating HTTP request: %w", err)
+	}
+
+	// Set the authorization header with the API token.
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apiToken))
+	req.Header.Set("Content-Type", "application/json") // Add content type header
+
+	// Create an HTTP client and send the request.
+	client := &http.Client{
+		Timeout: 10 * time.Second, // set timeout
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("error sending HTTP request: %w", err)
+	}
+	defer resp.Body.Close() // ensure body is closed
+
+	// Read the response body.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("error reading response body: %w", err)
+	}
+
+	// Check the response status code.
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("API request failed with status %s and body: %s", resp.Status, string(body))
+	}
+
+	// Unmarshal the JSON data into the 'response' struct.
+	var response DataChannelResponses
+	err = json.Unmarshal(body, &response)
+	if err != nil {
+		return 0, fmt.Errorf("error unmarshalling JSON response: %w", err)
+	}
+
+	return response.DataChannels[0].Id, nil
+}
+
 func main() {
 	// Check if the required command-line arguments are provided.
 	if len(os.Args) != 5 {
@@ -206,6 +344,10 @@ func main() {
 	turnAccountID := os.Args[2]
 	sfuApiToken := os.Args[3]
 	sfuAppID := os.Args[4]
+
+	// ==========================================================================================
+	// Create two PeerConnections which are only allowed to connect through the TURN relays each.
+	// ==========================================================================================
 
 	// Create the first RTCPeerConnection (peer1).
 	peer1, err := webrtc.NewPeerConnection(createNewWebrtcConfiguration(turnApiToken, turnAccountID))
@@ -221,6 +363,10 @@ func main() {
 	}
 	defer peer2.Close()
 
+	// ===============================================
+	// Set up ICE call backs for both PeerConnections.
+	// ===============================================
+
 	// Gather ICE candidates for peer1.
 	gatherComplete1 := make(chan struct{})
 	peer1.OnICECandidate(func(candidate *webrtc.ICECandidate) {
@@ -229,11 +375,7 @@ func main() {
 			return
 		}
 		candJson := candidate.ToJSON()
-		log.Printf("Peer2 adding ICE candidate: %v", candJson)
-		err := peer2.AddICECandidate(candJson)
-		if err != nil {
-			log.Printf("error adding ICE candidate to peer2: %v", err)
-		}
+		log.Printf("Peer1 gathered ICE candidate: %v", candJson)
 	})
 
 	peer1.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
@@ -256,11 +398,7 @@ func main() {
 			return
 		}
 		candJson := candidate.ToJSON()
-		log.Printf("Peer1 adding ICE candidate: %v", candJson)
-		err := peer1.AddICECandidate(candJson)
-		if err != nil {
-			log.Printf("error adding ICE candidate to peer1: %v", err)
-		}
+		log.Printf("Peer2 gathered ICE candidate: %v", candJson)
 	})
 
 	peer2.OnICEConnectionStateChange(func(is webrtc.ICEConnectionState) {
@@ -275,96 +413,73 @@ func main() {
 		}
 	})
 
-	// Create a data channel on peer1.  This is how we'll send data.
-	dataChannel1, err := peer1.CreateDataChannel("dataChannel1", nil)
+	// ==============================================
+	// Set up data channels for both PeerConnections.
+	// ==============================================
+
+	// Create the system event data channels on peer1 and peer2.
+	// These are not (yet) used for anything.
+	systemDataChannel1, err := peer1.CreateDataChannel("server-events", nil)
 	if err != nil {
 		log.Fatalf("error creating data channel on peer1: %v", err)
 	}
+	systemDataChannel2, err := peer2.CreateDataChannel("server-events", nil)
+	if err != nil {
+		log.Fatalf("error creating data channel on peer2: %v", err)
+	}
 
-	// dataChannel2 will be set when peer2 receives the offer.
-	var dataChannel2 *webrtc.DataChannel
-	dataChannel2Open := make(chan struct{}) // Add this channel
-
-	// Set the handler for peer2's data channel.
-	peer2.OnDataChannel(func(d *webrtc.DataChannel) {
-		dataChannel2 = d
-		dataChannel2.OnOpen(func() {
-			log.Println("Data channel on peer2 opened")
-			close(dataChannel2Open) // Close the channel when dataChannel2 is open
-		})
-		dataChannel2.OnMessage(func(msg webrtc.DataChannelMessage) {
-			log.Printf("peer2 received: %s\n", string(msg.Data))
-		})
-		dataChannel2.OnError(func(err error) {
-			log.Printf("Data channel on peer2 error: %v", err)
-		})
-		dataChannel2.OnClose(func() {
-			log.Println("Data channel on peer 2 closed")
-		})
+	// Send test messages to the SFU.
+	systemDataChannel1.OnOpen(func() {
+		log.Println("System data channel on peer1 opened")
+		err = systemDataChannel1.SendText("Hello from peer1!")
+		if err != nil {
+			log.Fatalf("error sending message from peer1: %v", err)
+		}
+	})
+	systemDataChannel2.OnOpen(func() {
+		log.Println("System data channel on peer2 opened")
+		err = systemDataChannel2.SendText("Hello from peer2!")
+		if err != nil {
+			log.Fatalf("error sending message from peer2: %v", err)
+		}
 	})
 
-	// For a proper demo with peer1 and peer2 running on different machines the
-	// offer and answer from the next coupld of steps would need to get exchanged
-	// via a signaling server.
+	// =============================================
+	// Next we establish PeerConnection1 to the SFU.
+	// And start publishing a data channel.
+	// =============================================
 
 	// Create an offer from peer1.
-	offer, err := peer1.CreateOffer(nil)
+	offer1, err := peer1.CreateOffer(nil)
 	if err != nil {
-		log.Fatalf("error creating offer: %v", err)
+		log.Fatalf("error creating offer peer1: %v", err)
 	}
 
 	// Set peer1's local description.
-	err = peer1.SetLocalDescription(offer)
+	err = peer1.SetLocalDescription(offer1)
 	if err != nil {
 		log.Fatalf("error setting local description for peer1: %v", err)
 	}
 
-	fmt.Printf("========= waiting for gathering\n")
+	// We wait here for gathering to finish, so that all the ICE
+	// candidates are included in the SDP offer.
+	fmt.Printf("waiting for gathering to finish for peer1\n")
 	<-gatherComplete1
 
-	fmt.Printf("======= sdp: %v\n", peer1.LocalDescription().SDP)
-
-	sessionId, sdpAnswer, err := getCloudflareSfuSession(sfuApiToken, sfuAppID, peer1.LocalDescription().SDP)
+	sessionId1, sdpAnswer1, err := getCloudflareSfuSession(sfuApiToken, sfuAppID, peer1.LocalDescription().SDP)
 	if err != nil {
-		log.Fatalf("error requesting a session ID: %v", err)
+		log.Fatalf("error requesting a session ID for peer1: %v", err)
 	}
-	fmt.Printf("======= sessionID: %v\n", sessionId)
-	fmt.Printf("========= sdp: %v\n", sdpAnswer)
-
-	/*
-		// Set peer2's remote description with the offer.
-		err = peer2.SetRemoteDescription(offer)
-		if err != nil {
-			log.Fatalf("error setting remote description for peer2: %v", err)
-		}
-
-		// Create an answer from peer2.
-		answer, err := peer2.CreateAnswer(nil)
-		if err != nil {
-			log.Fatalf("error creating answer: %v", err)
-		}
-
-		// Set peer2's local description.
-		err = peer2.SetLocalDescription(answer)
-		if err != nil {
-			log.Fatalf("error setting local description for peer2: %v", err)
-		}
-	*/
+	fmt.Printf("sessionID for peer1: %v\n", sessionId1)
 
 	// Set peer1's remote description with the answer.
-	err = peer1.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdpAnswer})
+	err = peer1.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdpAnswer1})
 	if err != nil {
 		log.Fatalf("error setting remote description for peer1: %v", err)
 	}
 
-	// Wait for ICE gathering to complete on both peers.
-	//<-gatherComplete1
-	//<-gatherComplete2
-	//log.Printf("ICE gathering has finished")
-
-	log.Printf("Waiting for PeerConnection to connect")
+	log.Printf("Waiting for PeerConnection1 to connect to the SFU")
 	<-connected1
-	//<-connected2
 
 	// For illustration purposes lets try to find the IP address and port
 	// number peer1 got connected to. Unfortunately Pion doesn't fill the
@@ -391,20 +506,78 @@ func main() {
 		}
 	}
 
-	/*
-		// Block until the data channel is open on peer2
-		log.Printf("Waiting for data channel to open on peer2")
-		<-dataChannel2Open // Use the channel here
-		log.Printf("Data channel opened on peer2!")
-	*/
+	publisherId, err := publishDataChannel(sfuApiToken, sfuAppID, sessionId1, "channel-one")
+	if err != nil {
+		log.Fatalf("error publishing data channel request for peer1: %v", err)
+	}
+	fmt.Printf("publisher channel id: %v\n", publisherId)
 
-	// Send a message from peer1 to peer2 once the channel is open.
-	dataChannel1.OnOpen(func() {
-		log.Println("Data channel on peer1 opened")
-		err = dataChannel1.SendText("Hello from peer1!")
-		if err != nil {
-			log.Fatalf("error sending message from peer1: %v", err)
-		}
+	negotiated := true
+
+	// Add the data channel to the PeerConnection.
+	publisherDataChannel, err := peer1.CreateDataChannel("channel-one",
+		&webrtc.DataChannelInit{
+			Negotiated: &negotiated,
+			ID:         &publisherId,
+		})
+	if err != nil {
+		log.Fatalf("error creating data channel on peer1: %v", err)
+	}
+
+	// =====================================================
+	// Now it's time to establish the second PeerConnection.
+	// And subscribe to the data channel from peer 1.
+	// =====================================================
+
+	// Create an offer from peer2.
+	offer2, err := peer2.CreateOffer(nil)
+	if err != nil {
+		log.Fatalf("error creating offer for peer2: %v", err)
+	}
+
+	// Set peer2's local description.
+	err = peer2.SetLocalDescription(offer2)
+	if err != nil {
+		log.Fatalf("error setting local description for peer2: %v", err)
+	}
+
+	// We wait here for gathering to finish, so that all the ICE
+	// candidates are included in the SDP offer.
+	fmt.Printf("waiting for gathering to finish for peer2\n")
+	<-gatherComplete2
+
+	sessionId2, sdpAnswer1, err := getCloudflareSfuSession(sfuApiToken, sfuAppID, peer2.LocalDescription().SDP)
+	if err != nil {
+		log.Fatalf("error requesting a session ID for peer2: %v", err)
+	}
+	fmt.Printf("sessionID for peer2: %v\n", sessionId2)
+
+	// Set peer2's remote description with the answer.
+	err = peer2.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: sdpAnswer1})
+	if err != nil {
+		log.Fatalf("error setting remote description for peer2: %v", err)
+	}
+
+	log.Printf("Waiting for PeerConnection2 to connect to the SFU")
+	<-connected2
+
+	subscriberId, err := subscribeDataChannel(sfuApiToken, sfuAppID, sessionId2, sessionId1, "channel-one")
+	if err != nil {
+		log.Fatalf("error subscribing to data channel from peer1 on peer2: %v", err)
+	}
+	log.Printf("subscribed channel id: %v\n", subscriberId)
+
+	subscriberDataChannel, err := peer2.CreateDataChannel("channel-one-subscribed",
+		&webrtc.DataChannelInit{
+			Negotiated: &negotiated,
+			ID:         &subscriberId,
+		})
+
+	subscriberDataChannel.OnOpen(func() {
+		log.Printf("subscribed data channel opened on peer2\n")
+	})
+	subscriberDataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
+		log.Printf("peer 2 received: %v\n", string(msg.Data))
 	})
 
 	// Read from the console and send messages from peer1 to peer2.
@@ -419,8 +592,8 @@ func main() {
 			break
 		}
 
-		if dataChannel1.ReadyState() == webrtc.DataChannelStateOpen {
-			err = dataChannel1.SendText(msg)
+		if publisherDataChannel.ReadyState() == webrtc.DataChannelStateOpen {
+			err = publisherDataChannel.SendText(msg)
 			if err != nil {
 				log.Printf("error sending message from peer1: %v", err)
 			}
@@ -431,14 +604,19 @@ func main() {
 
 	// Close the data channels and peer connections.  These will be closed
 	// automatically by the defer statements, but it's good to be explicit.
-	if dataChannel1 != nil {
-		dataChannel1.Close()
+	if systemDataChannel1 != nil {
+		systemDataChannel1.Close()
 	}
-	/*
-		if dataChannel2 != nil {
-			dataChannel2.Close()
-		}
-	*/
+	if systemDataChannel2 != nil {
+		systemDataChannel2.Close()
+	}
+	if publisherDataChannel != nil {
+		systemDataChannel1.Close()
+	}
+	if subscriberDataChannel != nil {
+		subscriberDataChannel.Close()
+	}
+
 	peer1.Close()
-	//peer2.Close()
+	peer2.Close()
 }
